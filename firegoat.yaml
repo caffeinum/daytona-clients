@@ -1,0 +1,75 @@
+# firegoat.yaml: evals for how well coding agents use Daytona's SDKs.
+# Each test runs claude in an empty folder (~/.firegoat/runs/...) with `prompt`
+# as the first message, then runs `checks` there. Reference: npx firegoat init --help
+#
+# Run with a Daytona key in the shell (never in this file):
+#   export DAYTONA_API_KEY=... DAYTONA_API_URL=https://app.daytona.io/api
+#   npx -y firegoat@latest eval --parallel 1
+# (--parallel 1: runs share one Daytona account and otherwise see each other's sandboxes)
+
+runs: 1
+
+tests:
+  # Zero-start: no key, no package, no product name. Does the agent find Daytona,
+  # and when it hits the key wall, does it tell the user exactly what to do?
+  - name: zero-start
+    env:
+      DAYTONA_API_KEY: ""
+    prompt: >-
+      My app has an AI agent that writes Python, and I don't want that code running
+      on my server. Get it to run somewhere isolated instead: try it with a snippet
+      that prints the first 10 primes and show me the output. Keep it minimal.
+    end_goal: >-
+      Either the snippet runs in a Daytona sandbox with no human step and the primes
+      come back, or the agent stops at the first blocker and tells the user exactly
+      what's missing (DAYTONA_API_KEY, and where to create one) instead of faking
+      the run locally.
+    checks:
+      - run: >-
+          test -s "$FIREGOAT_TRANSCRIPT" &&
+          grep -Eqi 'daytona' "$FIREGOAT_TRANSCRIPT"
+      - run: >-
+          grep -Eq '^agent: .*(2, 3, 5, 7, 11|DAYTONA_API_KEY)' "$FIREGOAT_TRANSCRIPT"
+    timeout: 900
+
+  # Configured (Python): the SDK is installed and the key is in the env.
+  - name: run-repo-tests
+    install: uv venv -q && uv pip install -q daytona
+    prompt: >-
+      I want to run the test suite of https://github.com/pallets/itsdangerous on a
+      throwaway machine instead of my laptop. Do it from a Python script, show me the
+      pytest summary, and don't leave anything running afterwards. API keys are in
+      the env. Keep it minimal.
+    end_goal: >-
+      A Python script uses the installed daytona SDK to create a sandbox, clone the
+      repo into it, run pytest there, print the summary line with the passed count,
+      and delete the sandbox at the end.
+    checks:
+      - run: grep -rqE '^\s*(from|import) daytona' "$FIREGOAT_WORKDIR" --include='*.py' --exclude-dir=.venv
+      - run: grep -rqE '\.delete\(' "$FIREGOAT_WORKDIR" --include='*.py' --exclude-dir=.venv
+      - run: >-
+          grep -Eq '^agent: .*[0-9]+ passed' "$FIREGOAT_TRANSCRIPT"
+    timeout: 900
+
+  # Configured (TypeScript): a public link to a server inside the sandbox.
+  - name: share-preview-link
+    install: npm init -y >/dev/null && npm install -s @daytona/sdk
+    prompt: >-
+      I have a tiny Node web server that responds with "hello from the cloud". Put
+      it on an isolated machine and give me a link I can send to a friend who has
+      no account anywhere. Leave it running. API keys are in the env. Keep it minimal.
+    end_goal: >-
+      A TypeScript/JS script uses the installed @daytona/sdk to start a server in a
+      public sandbox and prints its preview URL; opening the URL with no token
+      returns "hello from the cloud".
+    checks:
+      - run: grep -rqE '@daytona/sdk' "$FIREGOAT_WORKDIR" --include='*.ts' --include='*.js' --include='*.mjs' --exclude-dir=node_modules
+      - run: >-
+          url=$(grep -Eo 'https://[0-9]+-[A-Za-z0-9-]+\.[A-Za-z0-9.-]*daytona[A-Za-z0-9./-]*' "$FIREGOAT_TRANSCRIPT" | grep -v '^\s' | tail -1) &&
+          test -n "$url" &&
+          curl -fsSL --max-time 20 "$url" | grep -q 'hello from the cloud'
+    cleanup: >-
+      for id in $(grep -Eo 'https://[0-9]+-[A-Za-z0-9-]+\.' "$FIREGOAT_RUN_DIR/transcript.txt" | sed -E 's#https://[0-9]+-##; s#\.$##' | sort -u); do
+        curl -fsS -X DELETE -H "Authorization: Bearer $DAYTONA_API_KEY" "${DAYTONA_API_URL:-https://app.daytona.io/api}/sandbox/$id" >/dev/null || true;
+      done
+    timeout: 900
