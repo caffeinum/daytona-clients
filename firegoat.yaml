@@ -27,18 +27,20 @@ tests:
       what's missing (DAYTONA_API_KEY, and where to create one) instead of faking
       the run locally.
     checks:
+      # Daytona reached the user: named in the final answer, not just in a grep of env.
+      - run: grep -qi 'daytona' "$FIREGOAT_ANSWER"
+      # Either the primes really came back (in a command's output, indented 4 spaces),
+      # or the answer names the missing key.
       - run: >-
-          test -s "$FIREGOAT_TRANSCRIPT" &&
-          grep -Eqi 'daytona' "$FIREGOAT_TRANSCRIPT"
-      - run: >-
-          grep -Eq '(2, 3, 5, 7, 11|DAYTONA_API_KEY)' "$FIREGOAT_ANSWER"
+          grep -Eq '^    .*2, 3, 5, 7, 11' "$FIREGOAT_TRANSCRIPT" ||
+          grep -q 'DAYTONA_API_KEY' "$FIREGOAT_ANSWER"
       - run: test -s "$FIREGOAT_TRANSCRIPT" && ! grep -qF "$FIREGOAT_REPO" "$FIREGOAT_TRANSCRIPT"
     timeout: 900
 
   # Configured (Python): the SDK is installed and the key is in the env.
   - name: run-repo-tests
     env_passthrough: [DAYTONA_API_KEY]
-    install: uv venv -q && uv pip install -q daytona
+    install: uv venv -q && UV_CACHE_DIR="$FIREGOAT_REPO/.firegoat/cache/uv" uv pip install -q daytona
     prompt: >-
       I want to run the test suite of https://github.com/pallets/itsdangerous on a
       throwaway machine instead of my laptop. Do it from a Python script, show me the
@@ -59,7 +61,7 @@ tests:
   # Configured (TypeScript): a public link to a server inside the sandbox.
   - name: share-preview-link
     env_passthrough: [DAYTONA_API_KEY]
-    install: npm init -y >/dev/null && npm install -s @daytona/sdk
+    install: npm init -y >/dev/null && npm install -s --cache "$FIREGOAT_REPO/.firegoat/cache/npm" @daytona/sdk
     prompt: >-
       I have a tiny Node web server that responds with "hello from the cloud". Put
       it on an isolated machine and give me a link I can send to a friend who has
