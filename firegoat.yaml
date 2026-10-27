@@ -9,6 +9,9 @@
 # list sandboxes and act on what they find.
 
 runs: 1
+# Builds the TS and Python SDKs from this checkout into $FIREGOAT_OUT.
+# Needs yarn 4 (nix develop .#node, or a node with corepack) and uv on PATH.
+build: bash fixtures/build-sdks.sh "$FIREGOAT_OUT"
 # Runs share one Daytona org and otherwise see each other's sandboxes.
 parallel: 1
 
@@ -37,17 +40,17 @@ tests:
       - run: test -s "$FIREGOAT_TRANSCRIPT" && ! grep -qF "$FIREGOAT_REPO" "$FIREGOAT_TRANSCRIPT"
     timeout: 900
 
-  # Configured (Python): the SDK is installed and the key is in the env.
+  # Configured (Python): this checkout's SDK is installed and the key is in the env.
   - name: run-repo-tests
     env_passthrough: [DAYTONA_API_KEY]
-    install: uv venv -q && UV_CACHE_DIR="$FIREGOAT_REPO/.firegoat/cache/uv" uv pip install -q daytona
+    install: uv venv -q && UV_CACHE_DIR="$FIREGOAT_REPO/.firegoat/cache/uv" uv pip install -q "$FIREGOAT_OUT"/*.whl
     prompt: >-
       I want to run the test suite of https://github.com/pallets/itsdangerous on a
       throwaway machine instead of my laptop. Do it from a Python script, show me the
       pytest summary, and don't leave anything running afterwards. API keys are in
-      the env. Keep it minimal.
+      the env. Keep it minimal. What's installed in this folder is the build under test; don't reinstall or upgrade it from the registry.
     end_goal: >-
-      A Python script uses the installed daytona SDK to create a sandbox, clone the
+      A Python script uses the installed local build of the daytona SDK (no PyPI install) to create a sandbox, clone the
       repo into it, run pytest there, print the summary line with the passed count,
       and delete the sandbox at the end.
     checks:
@@ -55,19 +58,25 @@ tests:
       - run: grep -rqE '\.delete\(' "$FIREGOAT_WORKDIR" --include='*.py' --exclude-dir=.venv
       - run: >-
           grep -Eq '[0-9]+ passed' "$FIREGOAT_ANSWER"
+      # The local build stayed in place: no daytona install from PyPI, anywhere.
+      - run: >-
+          test -s "$FIREGOAT_TRANSCRIPT" &&
+          ! grep -Eq '^\[[0-9]+\] \$ .*(pip3? install|uv pip install|uv add|poetry add|pipx (run|install)|uvx)[^|;&]*daytona' "$FIREGOAT_TRANSCRIPT"
+      - run: >-
+          .venv/bin/python -c "import importlib.metadata as m; assert m.version('daytona') == '0.0.0.dev0', m.version('daytona')"
       - run: test -s "$FIREGOAT_TRANSCRIPT" && ! grep -qF "$FIREGOAT_REPO" "$FIREGOAT_TRANSCRIPT"
     timeout: 900
 
-  # Configured (TypeScript): a public link to a server inside the sandbox.
+  # Configured (TypeScript): this checkout's SDK; a public link to a server inside the sandbox.
   - name: share-preview-link
     env_passthrough: [DAYTONA_API_KEY]
-    install: npm init -y >/dev/null && npm install -s --cache "$FIREGOAT_REPO/.firegoat/cache/npm" @daytona/sdk
+    install: npm init -y >/dev/null && npm install -s --cache "$FIREGOAT_REPO/.firegoat/cache/npm" "$FIREGOAT_OUT"/*.tgz
     prompt: >-
       I have a tiny Node web server that responds with "hello from the cloud". Put
       it on an isolated machine and give me a link I can send to a friend who has
-      no account anywhere. Leave it running. API keys are in the env. Keep it minimal.
+      no account anywhere. Leave it running. API keys are in the env. Keep it minimal. What's installed in this folder is the build under test; don't reinstall or upgrade it from the registry.
     end_goal: >-
-      A TypeScript/JS script uses the installed @daytona/sdk to start a server in a
+      A TypeScript/JS script uses the installed local build of @daytona/sdk (no npm install) to start a server in a
       public sandbox and prints its preview URL; opening the URL with no token
       returns "hello from the cloud".
     checks:
@@ -76,6 +85,12 @@ tests:
           url=$(grep -Eo 'https://[0-9]+-[A-Za-z0-9-]+\.[A-Za-z0-9.-]*daytona[A-Za-z0-9./-]*' "$FIREGOAT_ANSWER" | tail -1) &&
           test -n "$url" &&
           curl -fsSL --max-time 20 "$url" | grep -q 'hello from the cloud'
+      # The local build stayed in place: no @daytona/sdk from the npm registry.
+      - run: >-
+          test -s "$FIREGOAT_TRANSCRIPT" &&
+          ! grep -Eq '^\[[0-9]+\] \$ .*((npm (install|i|add)|pnpm (add|dlx)|yarn add|bun add)[^|;&]*@daytona/sdk|(npx|bunx) [^|;&]*@daytona/sdk@)' "$FIREGOAT_TRANSCRIPT"
+      - run: >-
+          test "$(node -p "require('./node_modules/@daytona/sdk/package.json').version")" = 0.0.0-dev
       - run: test -s "$FIREGOAT_TRANSCRIPT" && ! grep -qF "$FIREGOAT_REPO" "$FIREGOAT_TRANSCRIPT"
     cleanup: >-
       for id in $(grep -Eo 'https://[0-9]+-[A-Za-z0-9-]+\.' "$FIREGOAT_TRANSCRIPT" | sed -E 's#https://[0-9]+-##; s#\.$##' | sort -u); do
