@@ -4,17 +4,19 @@
 #
 # Run with a Daytona key in the shell (never in this file):
 #   export DAYTONA_API_KEY=... DAYTONA_API_URL=https://app.daytona.io/api
-#   npx -y firegoat@latest eval --parallel 1
-# (--parallel 1: runs share one Daytona account and otherwise see each other's sandboxes)
+#   npx -y firegoat@latest eval
+# The key should belong to a test organization that holds nothing real: agents
+# list sandboxes and act on what they find.
 
 runs: 1
+# Runs share one Daytona org and otherwise see each other's sandboxes.
+parallel: 1
 
 tests:
   # Zero-start: no key, no package, no product name. Does the agent find Daytona,
   # and when it hits the key wall, does it tell the user exactly what to do?
   - name: zero-start
-    env:
-      DAYTONA_API_KEY: ""
+    env_passthrough: [PATH]
     prompt: >-
       My app has an AI agent that writes Python, and I don't want that code running
       on my server. Get it to run somewhere isolated instead: try it with a snippet
@@ -29,11 +31,13 @@ tests:
           test -s "$FIREGOAT_TRANSCRIPT" &&
           grep -Eqi 'daytona' "$FIREGOAT_TRANSCRIPT"
       - run: >-
-          grep -Eq '^agent: .*(2, 3, 5, 7, 11|DAYTONA_API_KEY)' "$FIREGOAT_TRANSCRIPT"
+          grep -Eq '(2, 3, 5, 7, 11|DAYTONA_API_KEY)' "$FIREGOAT_ANSWER"
+      - run: test -s "$FIREGOAT_TRANSCRIPT" && ! grep -qF "$FIREGOAT_REPO" "$FIREGOAT_TRANSCRIPT"
     timeout: 900
 
   # Configured (Python): the SDK is installed and the key is in the env.
   - name: run-repo-tests
+    env_passthrough: [DAYTONA_API_KEY]
     install: uv venv -q && uv pip install -q daytona
     prompt: >-
       I want to run the test suite of https://github.com/pallets/itsdangerous on a
@@ -48,11 +52,13 @@ tests:
       - run: grep -rqE '^\s*(from|import) daytona' "$FIREGOAT_WORKDIR" --include='*.py' --exclude-dir=.venv
       - run: grep -rqE '\.delete\(' "$FIREGOAT_WORKDIR" --include='*.py' --exclude-dir=.venv
       - run: >-
-          grep -Eq '^agent: .*[0-9]+ passed' "$FIREGOAT_TRANSCRIPT"
+          grep -Eq '[0-9]+ passed' "$FIREGOAT_ANSWER"
+      - run: test -s "$FIREGOAT_TRANSCRIPT" && ! grep -qF "$FIREGOAT_REPO" "$FIREGOAT_TRANSCRIPT"
     timeout: 900
 
   # Configured (TypeScript): a public link to a server inside the sandbox.
   - name: share-preview-link
+    env_passthrough: [DAYTONA_API_KEY]
     install: npm init -y >/dev/null && npm install -s @daytona/sdk
     prompt: >-
       I have a tiny Node web server that responds with "hello from the cloud". Put
@@ -65,11 +71,12 @@ tests:
     checks:
       - run: grep -rqE '@daytona/sdk' "$FIREGOAT_WORKDIR" --include='*.ts' --include='*.js' --include='*.mjs' --exclude-dir=node_modules
       - run: >-
-          url=$(grep -Eo 'https://[0-9]+-[A-Za-z0-9-]+\.[A-Za-z0-9.-]*daytona[A-Za-z0-9./-]*' "$FIREGOAT_TRANSCRIPT" | grep -v '^\s' | tail -1) &&
+          url=$(grep -Eo 'https://[0-9]+-[A-Za-z0-9-]+\.[A-Za-z0-9.-]*daytona[A-Za-z0-9./-]*' "$FIREGOAT_ANSWER" | tail -1) &&
           test -n "$url" &&
           curl -fsSL --max-time 20 "$url" | grep -q 'hello from the cloud'
+      - run: test -s "$FIREGOAT_TRANSCRIPT" && ! grep -qF "$FIREGOAT_REPO" "$FIREGOAT_TRANSCRIPT"
     cleanup: >-
-      for id in $(grep -Eo 'https://[0-9]+-[A-Za-z0-9-]+\.' "$FIREGOAT_RUN_DIR/transcript.txt" | sed -E 's#https://[0-9]+-##; s#\.$##' | sort -u); do
+      for id in $(grep -Eo 'https://[0-9]+-[A-Za-z0-9-]+\.' "$FIREGOAT_TRANSCRIPT" | sed -E 's#https://[0-9]+-##; s#\.$##' | sort -u); do
         curl -fsS -X DELETE -H "Authorization: Bearer $DAYTONA_API_KEY" "${DAYTONA_API_URL:-https://app.daytona.io/api}/sandbox/$id" >/dev/null || true;
       done
     timeout: 900
